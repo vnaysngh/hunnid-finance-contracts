@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.9;
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 enum LoanStatus { Pending, Active, Repaid }
 
@@ -8,6 +9,7 @@ contract PigPigFinance {
     struct Loan {
         uint256 id;
         address owner;
+        address lender; 
         address borrowToken;
         address collateralToken;
         uint256 borrowAmount;
@@ -46,6 +48,14 @@ contract PigPigFinance {
 
             //is everything ok?
             require(loan.endDate < block.timestamp, 'The endDate should be a date in future');
+
+                    // Check allowance for collateral token
+            IERC20 collateralToken = IERC20(_collateralToken);
+            uint256 allowance = collateralToken.allowance(msg.sender, address(this));
+            require(allowance >= _collateralAmount, "Insufficient allowance for collateral");
+
+            // Transfer collateral to the contract
+            require(collateralToken.transferFrom(msg.sender, address(this), _collateralAmount), "Collateral transfer failed");
             
             loan.id = loanId;
             loan.owner = _owner;
@@ -65,39 +75,47 @@ contract PigPigFinance {
             return loanId;
         }
 
-    //approve and pay loan
-    function approveAndPayLoan(uint256 _id) public payable {
-            Loan storage loan = loans[_id];
-            uint256 amount = loan.borrowAmount;
+   function approveAndPayLoan(uint256 _id, address _owner, uint256 _amount) public {
+        Loan storage loan = loans[_id];
 
-            require(loan.status == LoanStatus.Pending, "Loan is not pending");
+        require(loan.status == LoanStatus.Pending, "Loan is not pending");
 
-            (bool sent,) = payable(loan.owner).call{value: amount}("");
-            require(sent, "Failed to send Ether");
+        IERC20 borrowToken = IERC20(loan.borrowToken);
 
-            if(sent) {
-                loan.status = LoanStatus.Active;
-                activeLoanCount++;
-                pendingLoanCount = totalLoanCount -  activeLoanCount - repaidLoanCount;
-            }
-        }
+        // Check lender's balance
+        uint256 balance = borrowToken.balanceOf(msg.sender);
+        require(balance >= _amount, "Insufficient balance to fund the loan");
+
+        // Ensure that allowance is sufficient
+        uint256 allowance = borrowToken.allowance(msg.sender, address(this));
+        require(allowance >= _amount, "Insufficient allowance to transfer tokens");
+
+        // Attempt the transfer
+        require(borrowToken.transferFrom(msg.sender, _owner, _amount), "Failed to transfer borrow tokens");
+
+        loan.lender = msg.sender; // Set the lender's address
+        loan.status = LoanStatus.Active;
+        activeLoanCount++;
+        pendingLoanCount = totalLoanCount - activeLoanCount - repaidLoanCount;
+    }
 
 
     //repay loan
     function repayLoan(uint256 _id) public payable {
-        uint256 amount = msg.value;
         Loan storage loan = loans[_id];
 
         require(loan.status == LoanStatus.Active, "Loan is not active");
 
-        (bool sent,) = payable(loan.owner).call{value: amount}("");
-        require(sent, "Failed to send Ether");
+        IERC20 borrowToken = IERC20(loan.borrowToken);
+        require(borrowToken.transferFrom(msg.sender, loan.lender, loan.borrowAmount), "Failed to transfer borrow tokens");
 
-        if(sent){
-            loan.status = LoanStatus.Repaid;
-            repaidLoanCount++;
-            activeLoanCount --;
-        }
+        loan.status = LoanStatus.Repaid;
+        repaidLoanCount++;
+        activeLoanCount --;
+
+              // Unlock collateral and return it to the borrower
+        IERC20 collateralToken = IERC20(loan.collateralToken);
+        require(collateralToken.transfer(loan.owner, loan.collateralAmount), "Failed to return collateral");
     }
 
      //  all loan counts
@@ -144,9 +162,15 @@ contract PigPigFinance {
     }
 
     function deleteLoan(uint256 _id, address _owner) public {
+        Loan storage loan = loans[_id];
+
         require(loans[_id].status != LoanStatus.Repaid, "Cannot delete a repaid loan");
         require(loans[_id].status == LoanStatus.Pending, "Loan is not pending");
         require(loans[_id].owner == _owner, "Only the loan owner can delete this loan");
+
+        // Return collateral to the borrower
+        IERC20 collateralToken = IERC20(loan.collateralToken);
+        require(collateralToken.transfer(loan.owner, loan.collateralAmount), "Failed to return collateral");
 
         delete loans[_id];
 
