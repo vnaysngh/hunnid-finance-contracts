@@ -22,6 +22,7 @@ contract HunnidFinance {
     }
 
     mapping(uint256 => Loan) public loans;
+    uint256[] public loanIds;
 
     uint256 public totalLoanCount = 0;
     uint256 public activeLoanCount = 0;
@@ -32,9 +33,8 @@ contract HunnidFinance {
         return uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, address(this))));
     }
 
-
-    //create loan
-    function createLoan( address _owner,
+    function createLoan(
+        address _owner,
         address _borrowToken,
         address _collateralToken,
         uint256 _borrowAmount,
@@ -42,42 +42,47 @@ contract HunnidFinance {
         uint _rate,
         uint _duration,
         uint256 _startDate,
-        uint256 _endDate) public returns (uint256) {
-            uint256 loanId = generateUniqueId();
-            // is everything ok?
-            require(_endDate > block.timestamp, 'The endDate should be a date in future');
+        uint256 _endDate
+    ) public returns (uint256) {
+        uint256 loanId = generateUniqueId();
+        
+        require(_endDate > block.timestamp, 'The endDate should be a date in future');
 
-            // Check allowance for collateral token
-            IERC20 collateralToken = IERC20(_collateralToken);
-            uint256 allowance = collateralToken.allowance(msg.sender, address(this));
-            require(allowance >= _collateralAmount, "Insufficient allowance for collateral");
+        // Check allowance for collateral token
+        IERC20 collateralToken = IERC20(_collateralToken);
+        uint256 allowance = collateralToken.allowance(msg.sender, address(this));
+        require(allowance >= _collateralAmount, "Insufficient allowance for collateral");
 
-            // Transfer collateral to the contract
-            require(collateralToken.transferFrom(msg.sender, address(this), _collateralAmount), "Collateral transfer failed");
+        // Transfer collateral to the contract
+        require(collateralToken.transferFrom(msg.sender, address(this), _collateralAmount), "Collateral transfer failed");
 
-            Loan storage loan = loans[totalLoanCount];
-            
-            loan.id = loanId;
-            loan.owner = _owner;
-            loan.borrowToken = _borrowToken;
-            loan.collateralToken = _collateralToken;
-            loan.borrowAmount = _borrowAmount;
-            loan.collateralAmount = _collateralAmount;
-            loan.rate = _rate;
-            loan.duration = _duration;
-            loan.startDate = _startDate;
-            loan.endDate = _endDate;
-            loan.status = LoanStatus.Pending;
+        // Create and store the loan directly
+        loans[loanId] = Loan(
+            loanId,
+            _owner,
+            address(0), // lender not set yet
+            _borrowToken,
+            _collateralToken,
+            _borrowAmount,
+            _collateralAmount,
+            _rate,
+            _duration,
+            _startDate,
+            _endDate,
+            LoanStatus.Pending
+        );
 
-            totalLoanCount++;
-            pendingLoanCount++;
+        loanIds.push(loanId);
+        totalLoanCount++;
+        pendingLoanCount++;
 
-            return loanId;
-        }
+        return loanId;
+    }
 
    function approveAndPayLoan(uint256 _id, address _owner, uint256 _amount) public {
         Loan storage loan = loans[_id];
 
+        require(loan.id != 0, "Loan does not exist");
         require(loan.status == LoanStatus.Pending, "Loan is not pending");
 
         IERC20 borrowToken = IERC20(loan.borrowToken);
@@ -99,11 +104,10 @@ contract HunnidFinance {
         pendingLoanCount = totalLoanCount - activeLoanCount - repaidLoanCount;
     }
 
-
-    //repay loan
     function repayLoan(uint256 _id) public payable {
         Loan storage loan = loans[_id];
 
+        require(loan.id != 0, "Loan does not exist");
         require(loan.status == LoanStatus.Active, "Loan is not active");
 
         IERC20 borrowToken = IERC20(loan.borrowToken);
@@ -111,49 +115,41 @@ contract HunnidFinance {
 
         loan.status = LoanStatus.Repaid;
         repaidLoanCount++;
-        activeLoanCount --;
+        activeLoanCount--;
 
-              // Unlock collateral and return it to the borrower
+        // Unlock collateral and return it to the borrower
         IERC20 collateralToken = IERC20(loan.collateralToken);
         require(collateralToken.transfer(loan.owner, loan.collateralAmount), "Failed to return collateral");
     }
 
-     //  all loan counts
     function getLoanCounts() public view returns (uint256, uint256, uint256, uint256) {
         return (totalLoanCount, activeLoanCount, pendingLoanCount, repaidLoanCount);
     }
 
-    // fetch all loans
     function getLoans() public view returns (Loan[] memory){
-        Loan[] memory allLoans = new Loan[](totalLoanCount);
+         Loan[] memory allLoans = new Loan[](totalLoanCount);
 
-        for(uint i=0; i< totalLoanCount; i++){
-            Loan storage item = loans[i];
-            allLoans[i] = item;
+        for(uint i = 0; i < loanIds.length; i++) {
+            allLoans[i] = loans[loanIds[i]];
         }
 
         return allLoans;
     }
 
-    // Get all user loans
     function getUserLoans(address _owner) public view returns (Loan[] memory) {
-        
-        // First, count the number of loans for the user
         uint userLoanCount = 0;
-        for (uint i = 0; i < totalLoanCount; i++) {
-            if (loans[i].owner == _owner) {
+        for (uint i = 0; i < loanIds.length; i++) {
+            if (loans[loanIds[i]].owner == _owner) {
                 userLoanCount++;
             }
         }
 
-        // Create an array of the correct size
         Loan[] memory userLoans = new Loan[](userLoanCount);
         uint index = 0;
 
-        // Populate the userLoans array with the user's loans
-        for (uint i = 0; i < totalLoanCount; i++) {
-            if (loans[i].owner == _owner) {
-                userLoans[index] = loans[i];
+        for (uint i = 0; i < loanIds.length; i++) {
+            if (loans[loanIds[i]].owner == _owner) {
+                userLoans[index] = loans[loanIds[i]];
                 index++;
             }
         }
@@ -162,15 +158,24 @@ contract HunnidFinance {
     }
 
     function deleteLoan(uint256 _id, address _owner) public {
-        Loan storage loan = loans[_id];
+         Loan storage loan = loans[_id];
 
-        require(loans[_id].status != LoanStatus.Repaid, "Cannot delete a repaid loan");
-        require(loans[_id].status == LoanStatus.Pending, "Loan is not pending");
-        require(loans[_id].owner == _owner, "Only the loan owner can delete this loan");
+        require(loan.id != 0, "Loan does not exist");
+        require(loan.status == LoanStatus.Pending, "Loan is not pending");
+        require(loan.owner == _owner, "Only the loan owner can delete this loan");
 
         // Return collateral to the borrower
         IERC20 collateralToken = IERC20(loan.collateralToken);
         require(collateralToken.transfer(loan.owner, loan.collateralAmount), "Failed to return collateral");
+
+        // Remove the loan ID from the loanIds array
+        for (uint i = 0; i < loanIds.length; i++) {
+            if (loanIds[i] == _id) {
+                loanIds[i] = loanIds[loanIds.length - 1];
+                loanIds.pop();
+                break;
+            }
+        }
 
         delete loans[_id];
 
@@ -178,5 +183,4 @@ contract HunnidFinance {
         pendingLoanCount--;
         totalLoanCount--;
     }
-
 }
