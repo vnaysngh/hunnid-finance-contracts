@@ -4,7 +4,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 enum LoanStatus { Pending, Active, Repaid }
 
-contract PigPigFinance {
+contract HunnidFinance {
     // constructor() {}
     struct Loan {
         uint256 id;
@@ -43,19 +43,19 @@ contract PigPigFinance {
         uint _duration,
         uint256 _startDate,
         uint256 _endDate) public returns (uint256) {
-            Loan storage loan = loans[totalLoanCount];
-            uint256 loanId = generateUniqueId(); // Unique ID for the new loan
+            uint256 loanId = generateUniqueId();
+            // is everything ok?
+            require(_endDate > block.timestamp, 'The endDate should be a date in future');
 
-            //is everything ok?
-            require(loan.endDate < block.timestamp, 'The endDate should be a date in future');
-
-                    // Check allowance for collateral token
+            // Check allowance for collateral token
             IERC20 collateralToken = IERC20(_collateralToken);
             uint256 allowance = collateralToken.allowance(msg.sender, address(this));
             require(allowance >= _collateralAmount, "Insufficient allowance for collateral");
 
             // Transfer collateral to the contract
             require(collateralToken.transferFrom(msg.sender, address(this), _collateralAmount), "Collateral transfer failed");
+
+            Loan storage loan = loans[totalLoanCount];
             
             loan.id = loanId;
             loan.owner = _owner;
